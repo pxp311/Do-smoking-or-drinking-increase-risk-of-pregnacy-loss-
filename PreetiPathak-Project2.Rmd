@@ -1,0 +1,775 @@
+---
+title: "Do smoking or drinking increase risk of pregnacy loss?"
+author: "Preeti Pathak"
+date: "`r Sys.time()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: yes
+    code_folding: show
+---
+
+
+
+## Preliminaries
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr); library(rmdformats)
+
+## Global options
+opts_chunk$set(cache=FALSE,
+               prompt=FALSE,
+               tidy=FALSE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+
+```{r load packages}
+library(skimr)
+library(ggridges)
+library(magrittr)
+library(pander)
+library(arm)
+library(rms)
+library(leaps)
+library(lars)
+library(pROC)
+library(ROCR)
+library(simputation)
+library(modelr)
+library(broom)
+library(tidyverse)
+```
+
+# Task-1 Data Source
+This data is obtained from Nhanes 2015-2016 from following link.  https://wwwn.cdc.gov/nchs/nhanes/ContinuousNhanes/Default.aspx?BeginYear=2015
+
+Pregnancy loss due to miscarriage is a harsh reality faced by many expecting couples. Stillbirth or death of a child before or during the delivery is more frustrating than  miscarriage. Both miscarriage and stillbirth are described as pregnancy loss, but they differ according to how the loss occurs.
+
+Long term smoking increases biological age of a person and increase visible signs of aging (Arch Dermatol. 2007;143(12):1543-1546).Considering this paper into account,  major aim of this study is to find if smoking or drinking is associated with pregnancy loss.    
+
+This study focused on women, who smoked and drink in their life intermittently or regularly and become pregnant at one point in their life. There is no information about the participant's smoking and drinking habit during pregnancy. However, I want to investigate if pregnancy loss is due to smoking or drinking exposure for some time in their life.
+
+##1a Inclusion and exclusion criteria
+In this study all the female participants younger than 13 years old at the time of screening are excluded. Only Participants who are pregnant some point in their life for at least once and smoked cigarettes for at least for 1 year habitually. Participants who are never pregnant and smoked intermittently are excluded from the study.
+
+
+
+# Task-2 Load and tidy the dataset
+```{r}
+d1_project2<-read.csv("d1_project2.csv")%>%tbl_df()
+d1_project2
+```
+```{r}
+alcohol_nhanes<-read.csv("alcohol_nhanes.csv")%>%tbl_df()
+alcohol_nhanes
+```
+
+```{r}
+smoking_nhanes<-read.csv("smoking_nhanes.csv")%>%tbl_df()
+smoking_nhanes
+```
+
+```{r}
+d2_project2 <- merge(d1_project2,alcohol_nhanes,by = "SEQN",all = T) 
+d2_project2
+```
+```{r filter male gender and age less than 13 participants}
+d3_project2 <- merge(d2_project2,smoking_nhanes,by = "SEQN",all = T)%>% filter(RIAGENDR == 2 & RIDAGEYR >=13) 
+d3_project2
+```
+```{r}
+reprohlth_nhanes<-read_csv("reprohlth_nhanes.csv")%>%tbl_df()
+reprohlth_nhanes
+```
+```{r final file}
+project2_F1 <- merge(d3_project2,reprohlth_nhanes,by = "SEQN",all = T) 
+project2_F1
+```
+```{r}
+project2_F1$ALQ120U<-as.factor(project2_F1$ALQ120U)
+project2_F1$ALQ151<-as.factor(project2_F1$ALQ151)
+project2_F1$SMQ020<-as.factor(project2_F1$SMQ020)
+project2_F1$RHQ131<-as.factor(project2_F1$RHQ131)
+project2_F1$RIDRETH1<-as.factor(project2_F1$RIDRETH1)
+project2_F1$RHQ031<-as.factor(project2_F1$RHQ031)
+project2_F1    
+          
+```
+
+
+```{r}
+project2_F1 <- project2_F1 %>%
+    mutate(
+        ALQ151= factor(case_when(
+            ALQ151 == "1" ~ "Yes",
+            ALQ151 =="2"~"No"
+            )))
+```
+
+```{r}
+project2_F1 <- project2_F1 %>%
+    mutate(
+        SMQ020= factor(case_when(
+            SMQ020 == "1" ~ "Yes",
+           SMQ020 =="2"~"No"
+            )))
+```
+
+
+```{r}
+project2_F1 <- project2_F1 %>%
+    mutate(
+        RHQ131= factor(case_when(
+            RHQ131 == "1" ~ "Yes",
+           RHQ131 =="2"~"No"
+            )))
+```
+
+```{r}
+project2_F1 <- project2_F1 %>%
+    mutate(
+        RHQ031= factor(case_when(
+            RHQ031 == "1" ~ "Yes",
+          RHQ031 =="2"~"No"
+            )))
+project2_F1
+```
+
+
+```{r choosing cases who are pregnant at least once in their life time}
+project2_clean<-project2_F1%>%filter(RHQ131 == "Yes")
+project2_clean
+```
+
+```{r creating new variables }
+project2_clean$Preg_Loss <- project2_clean$RHQ160 - project2_clean$RHQ171
+project2_clean$smoke_exposure <- project2_clean$SMD055 - project2_clean$SMD030
+project2_clean$age_diff <- project2_clean$RHD190 - project2_clean$RHD180
+project2_clean
+```
+
+```{r}
+names(project2_clean) <- c("SEQN", "gender", "age","race", "alcohol_1", "alcohol_2", "100_cig", "age_smoke", "Age_last_smoke","smoke_4","age_2", "periods", "times_pregnant","delivery_1", "delivery_2","liv_birth", "pregnant","age_at_preg","Age_last_preg", "preg_loss" , "smoke_exposure","age_diff" )
+project2_clean
+```
+Since, all the participants are female and pregnant, variable `gender` and  `pregnant`, which are included for the sanity check are deleted from the dataset. I don't have plan to use the way of delivery to study outcome `pregnacy_loss` therefore, variables `delivery_1` and `delivery_2` and periods are omitted from the dataset.
+
+```{r}
+project2_clean <- subset( project2_clean, select = -c(gender,pregnant,delivery_1, delivery_2, periods  ) )
+project2_clean
+```
+## 2a Adressing the missingness
+```{r}
+map_df(project2_clean, function(x) sum(is.na(x)))
+```
+
+There are lots of missing values in smoke and alcohol variables. Since, it is important to determine smoking and drinking status in this study, variable `100_cig` and `alcohol_1`  is deleted in this study. 
+This study focuses on chronic exposure of smoking,  which is more than or at least 1 year smoking . All other smoking and alcohol variables are excluded in this study due to higher missing values.  
+
+
+```{r}
+project2_clean <- subset( project2_clean, select = -c(`100_cig`, alcohol_1, smoke_4 ) )
+project2_clean
+```
+```{r}
+project2_clean$smoke_exposure = replace(project2_clean$smoke_exposure, project2_clean$smoke_exposure %in% c(-979, -949, -737, -722, 0,941, 977,983,984), NA)
+```
+
+
+```{r}
+map_df(project2_clean, function(x) sum(is.na(x)))
+```
+Variable ` smoke exposure` has 1770 missing values, which means there is more than 50% of the data is missing. It is not appropriate to impute more than 50% of the data. Therefore, I did complete case analysis and ignore the missing values from this study. Final complete cases has 305 rows with 14 variables. 
+
+```{r}
+project2_Final<-project2_clean%>%
+  filter(complete.cases(.))
+project2_Final
+```
+Final complete cases has 305 cases with 14 variables.
+
+
+```{r}
+Hmisc::describe(project2_Final$age_diff)
+```
+There are too many age variables in the dataset. therefore, variable `age_diff` is converted into a categorical variable. 
+
+
+
+```{r genrating catagorical age_diff}
+project2_Final<-project2_Final%>%
+  mutate( age_diff_cat = case_when(
+age_diff < 10 ~ "low",
+age_diff < 20 ~ "medium",
+age_diff >= 20 ~ "high")) 
+table(project2_Final$age_diff_cat)
+```
+
+
+# Task 3: Listing of Tibble
+
+```{r}
+str(project2_Final)
+```
+
+#Task-4 Code book
+
+Variable   | Type        | Details
+---------: | ----------: | ----------------------------------------
+`SEQN`| character   | Identification code 
+`age`| continuous | Age of a participant at the time of screening in years
+`race`| multi-categorical | Race (Mexican American=1,Hispanic other=2, white=3,black=4, `Alcohol_2`| binary | Have you drink 5 or more drinks last month No=0, Yes=1
+`age_smoke`| continuous|Person's age when  started smoking in year
+`Age_last_smoke` | continuous |Person stooped smoking at the age in year 
+`age_2`| continuous | person's age when start having periods regularly
+`times_pregnant`|count | total number of time person become pregnant
+`liv_birth`|count| Total number of live birth after delivery
+`Age_at_preg`| continuous | persons age at first pregnancy
+`age_last_preg`| continuous | persons age at last pregnancy
+`preg_loss`| count | number of time person has miscarriage or still                                             birth(`times_preg`-`Liv_birth`)
+`smoke_exposure`| continuous | number of years of continuous smoking                                                             birth(`age_last_smoke`-`age_smoke`)
+`age_diff`| continuous | age difference between first and last pregnancy                                                             birth(`age_last_preg`-`age_at_preg`)
+`age_diff_cat`| categorical | age difference between first and last pregnancy                                                (low=0-10years, medium=10-20years,high=22-30)
+
+
+# Task 5: My Subjects
+There are 305 rows or cases with 15 variables.
+
+# Task 6: My Variables
+There are total 12 variables(column) in the dataset with 307(rows) cases. 
+
+`SEQN`
+Identification code 
+`age` 
+Age of a participant at the time of screening in years
+`race` 
+Race (Mexican American=1,Hispanic other=2, white=3,black=4, 
+`Alcohol_2` binary 
+`age_smoke`
+continuous|Person's age when  started smoking in year
+`age_last_smoke` 
+Person stopped smoking at the age in year 
+`age_2`
+person's age when start having periods regularly
+`times_pregnant`
+total number of time person become pregnant
+`liv_birth`
+Total number of live birth after delivery
+`age_at_preg`
+persons age at first pregnancy
+`preg_loss`
+number of time person has miscarriage or still birth(`times_preg`-`Liv_birth`)          `smoke_exposure` 
+number of years of continuous smoking (`age_last_smoke`-`age_smoke`) 
+`age_diff`
+age difference between first and last pregnancy                   (`age_last_preg`-`age_at_preg`)
+`age_diff_cat`
+age difference between first and last pregnancy (low=0-10years,medium=10-20years,high=22-30)
+
+# Task 7 Graphical presentation of data
+
+```{r message=FALSE, warning=FALSE}
+library(GGally)
+GGally::ggpairs(project2_Final %>%
+select(Age_last_preg, smoke_exposure, age_diff,age, liv_birth, preg_loss ))
+```
+
+
+```{r}
+project2_Final_plot<-project2_Final%>%filter(preg_loss<5)
+ggplot(project2_Final_plot, aes(x = factor(preg_loss), y = smoke_exposure, fill=alcohol_2))+
+geom_boxplot()+
+labs(title = "pregancy loss is correlated with increased smoking and drinking ",
+subtitle = "pregancy loss increases after chronic smoking", x="pregnancy loss", y="Number of years person smoked")+
+theme_bw()
+```
+
+
+##7a distribution of outcome variable
+
+
+```{r message=FALSE}
+ggplot(project2_Final, aes(x = preg_loss, fill = "blue" ))+
+geom_bar(aes(y = (..count..)/sum(..count..))) +
+geom_text(aes(y = (..count..)/sum(..count..),
+label = scales::percent((..count..) /
+sum(..count..))),
+stat = "count", vjust = 1,
+color = "black", size = 5) +
+scale_y_continuous(labels = scales::percent) +
+scale_fill_brewer(palette = "Dark2") +
+guides(fill = FALSE) +
+labs(y = "Percentage", title = "Outcome pregnancy loss distribution ", x="Pregnancy loss")+
+theme_bw()
+```
+Above graph indicates that 47% cases don`t have pregnancy loss however 53% cases have once or more than once pregnancy loss.
+
+##7bNumerical summary
+```{r}
+skim(project2_Final)
+```
+
+
+
+#Task-8 poisson Regression Model
+
+ Predict the count outcome  `preg_loss`  using some combination of the following five variables:
+ 
+ 
+1. Race
+2. smoke_exposure
+3. age_diff
+4. alcohol_2
+5. age_2 
+
+##Task-8a spearman rho plot
+
+```{r}
+plot(spearman2(preg_loss ~ race+smoke_exposure + age_diff_cat+age_diff+alcohol_2+age_2+age_at_preg+Age_last_preg+age+liv_birth+
+                 times_pregnant, data=project2_Final))
+```
+Above plot indicates that variable `times_pregnant`, `age_last_preg`and `age_diff_cat` has significant  impact on output variable `preg_loss`. I cannot include both the variable `age_last_preg`and `age_diff_cat`. Overall there are many age (continuous) variables in the data set. Lasso approach could help to understand which variable may be important  to include in the model.   
+
+
+##Selection of predictors by lasso
+
+```{r}
+library(lars)
+preds <- with(project2_Final, cbind(age,age_2, age_diff, age_at_preg, Age_last_preg, smoke_exposure, age_smoke, Age_last_smoke))
+
+lasso_p1 <- lars(preds, project2_Final$preg_loss, type="lasso")
+plot(lasso_p1)
+
+
+```
+
+```{r}
+summary(lasso_p1)
+```
+Based on the Cp statistics, it looks like the big improvements occur somewhere around the move from 4 to 5 degree of freedom. 
+
+```{r}
+set.seed(432)
+project2_lassocv <- cv.lars(preds, project2_Final$preg_loss, K=10)
+```
+ 
+
+```{r}
+frac <- project2_lassocv$index[which.min(project2_lassocv$cv)]
+frac
+```
+
+
+```{r}
+pro.cv <- coef(lasso_p1, s=frac, mode="fraction")
+round(pro.cv,3)
+```
+According to Lasso, variable `Age_last_preg` is important predictors for the out come `preg_loss`. Other smoking and alcohol variables are not statistically significantly associated with output `preg_loss`
+
+
+
+## poisson kitchen sink model 
+
+```{r kitchen sink model}
+mod_p1 <- glm(preg_loss ~ race+smoke_exposure+age+age_diff_cat,
+family = poisson(),
+data = project2_Final)
+mod_p1
+```
+
+```{r}
+anova(mod_p1, test = "Chisq")
+```
+Anova results indicate that variable ` age_diff_cat`(difference between maternal age at last pregnancy and first pregnancy) and `age` at screening has very significant impact on output `preg_loss`. Variable `smoke exposure`, and `alcohol_2` did not have significant impact on output. 
+
+## poisson model-2 with Lasso suggested predictor 
+
+```{r}
+mod_p2 <- glm(preg_loss ~ Age_last_preg,
+family = poisson(),
+data = project2_Final)
+mod_p2
+```
+```{r}
+anova(mod_p1, mod_p2,test = "Chisq" )
+```
+There is no difference between two models mentioned above. In other words, 
+Among the two variables `Age_last_preg` and `age_diff_cat` have a similar effect on the output`preg_loss`.  
+
+
+## Checking the poisson  model assumption
+
+```{r message=FALSE, warning=FALSE}
+library(boot)
+glm.diag.plots(mod_p1)
+```
+Top left graph shows jackknife residual plot, which does not indicate substantial problem. However, residual distribution does not indicate normal distribution, which should have been normally distributed in this case. There are many influential points in the cooks distance above dotted line. 
+
+```{r}
+glm.diag.plots(mod_p2)
+```
+Model with only one predictor `Age_last_birth` did not show significant improvement in residual plots from kitchen sink model. 
+
+```{r}
+library(countreg)
+rootogram(mod_p1, max = 10)
+```
+Rootogram indicates that model slightly over-fit `preg_loss`=0 while overestimates `preg_loss`=1. while, model under-fit `preg_loss`=6 and `preg_loss`=7
+
+```{r}
+
+rootogram(mod_p2, max = 10)
+```
+Rootogram indicates that model slightly under-fit `preg_loss`=0 while overestimates `preg_loss`=1. while, model under-fit `preg_loss`=6 and `preg_loss`=7
+
+```{r}
+glance(mod_p1)
+```
+```{r without age}
+glance(mod_p2)
+```
+Above summary indicates adding `Age_last_preg` variable significantly lower the AIC and BIC value. 
+ 
+
+##  kitchen sink poisson model summary
+
+```{r}
+d <- datadist(project2_Final)
+options(datadist = "d")
+
+mod_Glm_1 <- Glm(preg_loss ~ race+smoke_exposure + age_diff_cat+age+ alcohol_2,
+                     family = poisson(), 
+                     data = project2_Final, 
+                     x = T, y = T)
+
+mod_Glm_1
+```
+```{r}
+plot(summary(mod_Glm_1))
+```
+Above summary plot indicates variable `smoke exposure`, `race`,  `alcohol_2` does not affect pregnancy loss significantly. However, age difference from first pregnancy and last pregnancy is a deciding factor for the pregnancy loss. When the age between first pregnancy decreases from 20 years(medium)to low(10 years ) output pregnancy loss decreases significantly. This indicates that smoking and drinking habit does not increase pregnancy loss, but the age at pregnancy is a major factor for pregnancy loss.  
+
+
+## summary of poisson model based on Lasso selection
+
+According to lasso approach variable `age_last_preg` is significantly associated with outcome `pregnancy loss` Therefore, summary of model with only one variable is as follows .  
+
+```{r}
+d <- datadist(project2_Final)
+options(datadist = "d")
+
+mod_Glm_2 <- Glm(preg_loss ~ Age_last_preg,
+                     family = poisson(), 
+                     data = project2_Final, 
+                     x = T, y = T)
+
+mod_Glm_2
+```
+
+```{r}
+plot(nomogram(mod_Glm_2))
+```
+Above nomogram indicates outcome `pregnancy loss` increases after age at last pregnancy increases. 
+
+
+
+# Task-9 Test for overdispersion
+
+```{r}
+yhat <- predict(mod_p1, type = "response")
+n <- arm::display(mod_p1)$n
+```
+```{r}
+k <- arm::display(mod_p1)$k
+```
+```{r}
+z <- (project2_Final$preg_loss - yhat) / sqrt(yhat)
+cat("overdispersion ratio is ", sum(z^2)/ (n - k), "\n")
+```
+```{r}
+cat("p value of overdispersion test is ", 
+    pchisq(sum(z^2), df = n-k, lower.tail = FALSE), "\n")
+```
+Over dispersion ratio is 1.34 and p value is   6.044961e-05.   
+
+#Task-10 Negative Binomial Model 
+
+```{r}
+mod_nb1 <- MASS::glm.nb(preg_loss ~ race+smoke_exposure + age_diff_cat+age+ alcohol_2,
+                  data = project2_Final)
+
+summary(mod_nb1)
+```
+```{r}
+logLik(mod_nb1)
+```
+```{r}
+logLik(mod_p1)
+```
+```{r}
+2 * (logLik(mod_nb1) - logLik(mod_p1))
+```
+```{r}
+pchisq(2 * (logLik(mod_nb1) - logLik(mod_p1)), df = 1, lower.tail = FALSE)
+```
+Here, the difference in the log likelihoods is large enough that the resulting p value is very small(0.000261). This strongly suggests that the negative binomial model, which adds the dispersion parameter, is more appropriate than the raw Poisson model. 
+
+```{r}
+anova(mod_nb1)
+```
+Similar to Poisson model variables `age_diff_cat` and `age` are significant variables to predict output `preg_loss`.
+
+## Checking the negative-poisson  model assumption
+```{r}
+glm.diag.plots(mod_nb1)
+```
+Top left graph shows jackknife residual plot, which does not indicate substantial problem. However, residual distribution does not indicate normal distribution, which is better looking than Poisson model. There are less influential points in the cooks distance above dotted line than Poisson model. overall negative binomial model looks better than Poisson model. 
+
+```{r}
+rootogram(mod_nb1, max = 10)
+```
+Rotogram indicates that Negative binomial model is better fit than Poisson model.
+
+## Negative binomial model according to lasso selection
+```{r}
+mod_nb2 <- MASS::glm.nb(preg_loss ~  Age_last_preg,
+                  data = project2_Final)
+
+summary(mod_nb2)
+```
+```{r}
+glm.diag.plots(mod_nb2)
+```
+```{r}
+rootogram(mod_nb2, max = 10)
+```
+Model based on lasso selection with predictor `age_last_preg` showed a good fitting than Poisson lasso selection model. therefore, addressing the dispersion using negative binomial model perform better. 
+
+
+
+# Task-10 Prediction using kitchen sink negative binomial model
+
+```{r}
+set.seed(432)
+final_NB1 <- project2_Final %>%
+crossv_kfold(k = 10) %>%
+mutate(model = map(train, ~ MASS::glm.nb(preg_loss ~ race+smoke_exposure + age_diff_cat+age+ alcohol_2, data = .)))
+pred_NB1 <- final_NB1 %>%
+unnest(map2(model, test, ~ augment(.x, newdata = .y)))
+head(pred_NB1)
+```
+```{r}
+pred_NBF<-pred_NB1  %>%
+summarize(Model = "mod_nb1",
+RMSE = sqrt(mean((preg_loss - .fitted) ^2)),
+MAE = mean(abs(preg_loss - .fitted)))
+pred_NBF
+```
+After ten fold cross validation kitchen sink negative binomial model predicts outcome `pregnancy loss` with large error ( root mean square error 1.56).In other words, this model predicts more pregnancy loss than observed. 
+
+
+```{r}
+pred_NB1 %>%
+    mutate(errors = preg_loss - .fitted) %>%
+    ggplot(., aes(x = errors)) +
+    geom_histogram(bins = 30, fill = "darkviolet", col = "yellow") + 
+    labs(title = "Cross-Validated Errors in Prediction of preganacy loss",
+         subtitle = "Using a model (mod_nb1) including all predictors",
+         x = "Error in predicting preganacy loss")
+```
+```{r}
+par(mfrow=c(1,2))
+project2_Final$preg_loss %>% 
+    table() %>% barplot(main = "Observed pregnancy loss")
+set.seed(432)
+rnbinom(n = nrow(project2_Final), 
+        size = mod_nb1$theta,
+        mu = exp(coef(mod_nb1)[1])) %>%
+    table() %>% barplot(main = "Simulated pregnancy loss")
+```
+Ten fold cross validation kitchen negative binomial model predict higher pregnancy loss than observed. 
+
+
+
+
+
+## prediction using lasso selected negative binomial model 
+
+```{r message=FALSE, warning=FALSE}
+set.seed(432)
+final_NB2 <- project2_Final %>%
+crossv_kfold(k = 10) %>%
+mutate(model = map(train, ~ MASS::glm.nb(preg_loss ~ Age_last_preg, data = .)))
+pred_NB2 <- final_NB2 %>%
+unnest(map2(model, test, ~ augment(.x, newdata = .y)))
+head(pred_NB2)
+```
+```{r}
+pred_NBF2<-pred_NB2  %>%
+summarize(Model = "mod_nb2",
+RMSE = sqrt(mean((preg_loss - .fitted) ^2)),
+MAE = mean(abs(preg_loss - .fitted)))
+pred_NBF2
+```
+After 10 fold validation negative binomial model with one  variable `Age_last_preg`  predicts outcome `preg_loss` with root mean square error 1.53, which is lower compared to kitchen sink model with smoke and alcohol predictors in mod_nb1.This model with one predictor is better than kitchen sink model. 
+
+
+
+```{r}
+pred_NB2 %>%
+    mutate(errors = preg_loss - .fitted) %>%
+    ggplot(., aes(x = errors)) +
+    geom_histogram(bins = 30, fill = "darkviolet", col = "yellow") + 
+    labs(title = "Cross-Validated Errors in Prediction of preganacy loss",
+         subtitle = "Using a model (mod_nb2) including all predictors",
+         x = "Error in predicting preganacy loss")
+```
+overall prediction error indicates model predicts more pregnancy loss than expected. 
+
+
+```{r}
+par(mfrow=c(1,2))
+project2_Final$preg_loss %>% 
+    table() %>% barplot(main = "Observed preg_loss")
+set.seed(432)
+rnbinom(n = nrow(project2_Final), 
+        size = mod_nb2$theta,
+        mu = exp(coef(mod_nb2)[1])) %>%
+    table() %>% barplot(main = "Simulated preg_loss with 
+                              `age_last_preg")
+```
+Above plot indicates that model predicts lower pregnancy loss than observed. However, predictions are very close to the observed. This indicates that only predictor `age_last_preg` is only closest deciding factor for pregnancy loss outcome.  Therefore, this model does not perform well on the prediction ground.
+
+
+
+##prediction with kitchen sink poisson model
+
+```{r message=FALSE, warning=FALSE}
+set.seed(432)
+final_p1 <- project2_Final %>%
+crossv_kfold(k = 10) %>%
+mutate(model = map(train, ~ glm(preg_loss ~ race+smoke_exposure +Age_last_preg +age+ alcohol_2,family = poisson(),data = .)))
+pred_p1 <- final_p1 %>%
+unnest(map2(model, test, ~ augment(.x, newdata = .y)))
+head(pred_p1)
+```
+```{r}
+pred_pf1<-pred_p1  %>%
+summarize(Model = "mod_p1",
+RMSE = sqrt(mean((preg_loss - .fitted) ^2)),
+MAE = mean(abs(preg_loss - .fitted)))
+pred_pf1
+```
+Root mean square prediction error did not differ much in Poisson model compared to negative binomial model. 
+
+```{r}
+pred_p1 %>%
+    mutate(errors = preg_loss - .fitted) %>%
+    ggplot(., aes(x = errors)) +
+    geom_histogram(bins = 30, fill = "darkviolet", col = "yellow") + 
+    labs(title = "Cross-Validated Errors in Prediction of preganacy loss",
+         subtitle = "Using a posson model (mod_p1) including all predictors",
+         x = "Error in predicting preganacy loss")
+```
+
+
+ 
+
+#Task 11: Conclusions
+
+Analysis using Poisson model indicates that habitual smoking exposure (`smoke_exposure`) and binge(`alcohol_2`) drinking does not affect pregnancy loss (still birth or miscarriage). 
+
+```{r}
+plot(summary(mod_Glm_1))
+```
+Above summary plot indicates variable `smoke exposure`, `race`,  `alcohol_2`(binge drinking) does not affect pregnancy loss significantly. However, maternal age difference from first pregnancy and last pregnancy is a deciding factor for the pregnancy loss. When the age difference between last and first pregnancy decreases from 20 years(medium)to low(10 years ) output pregnancy loss decreases significantly. This indicates that smoking and drinking habit does not increase pregnancy loss, but the mothers age at the pregnancy is a major factor for pregnancy loss.  
+Poisson model with only one variable `Age_last_preg` significantly associated with pregnancy loss. 
+```{r}
+plot(summary(mod_Glm_2))
+```
+Poisson model with only one variable `Age_last_preg` significantly associated with pregnancy loss
+ 
+```{r}
+library(countreg)
+rootogram(mod_p2, max=10)
+```
+Poisson model rootogram indicates  that model slightly under-fit `preg_loss`=0 while overestimates `preg_loss`=1. Model also under-fit `preg_loss`=6 and `preg_loss`=7
+
+
+
+
+```{r}
+library(countreg)
+rootogram(mod_nb2, max=10)
+```
+
+Adressing dispersion in the Poisson model was corrected by the negative binomial model. Negative binomial model improved overall model fitting. 
+
+```{r}
+head(pred_NBF2)
+```
+Negative binomial model with only one predictor `Age_last_preg`( age of a mother at last pregnancy ) predict pregnancy loss with lower accuracy with root mean square (RMSE=1.53).
+
+```{r}
+par(mfrow=c(1,2))
+project2_Final$preg_loss %>% 
+    table() %>% barplot(main = "Observed preg_loss")
+set.seed(432)
+rnbinom(n = nrow(project2_Final), 
+        size = mod_nb2$theta,
+        mu = exp(coef(mod_nb2)[1])) %>%
+    table() %>% barplot(main = "Simulated preg_loss with 
+                              `age_last_preg")
+```
+```{r}
+par(mfrow=c(1,2))
+project2_Final$preg_loss %>% 
+    table() %>% barplot(main = "Observed pregnancy loss")
+set.seed(432)
+rnbinom(n = nrow(project2_Final), 
+        size = mod_nb1$theta,
+        mu = exp(coef(mod_nb1)[1])) %>%
+    table() %>% barplot(main = "Simulated pre_loss
+                                 with kitchen sink")
+```
+Simulated negative binomial model with only one predictor `Age_last_birth` (mother`s age at the last birth) predicts lower pregnancy loss than observed. On the other hand, kitchen sink model predicts higher pregnancy loss than observed as shown in the lower panel of above figure.
+None of the models provide adequate predictions about pregnancy loss. However, model identify an important trend that mother`s age at the pregnancy is deciding factor for pregnancy loss. 
+
+However, long term smoking increases biological age of a person and increase visible signs of aging (Arch Dermatol. 2007;143(12):1543-1546). If this paper including other papers has taken into account, then in this dataset smoking is not associated with pregnancy loss is a frustrating finding.
+
+The major disadvantage of the study is the dataset ends up with less number of cases(n=305)who smoked atleast one or more than one year. It also lacks information about the smoking and drinking habit during the pregnancy.
+
+
+## Incident Rate ratio
+
+```{r}
+
+exp(coef(mod_nb2))
+```
+```{r}
+exp(confint(mod_nb2))
+```
+
+On the incident rate ratio scale, incident rate of pregnancy loss is a 3.6% higher when maternal age at last pregnancy increases by one year.
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
